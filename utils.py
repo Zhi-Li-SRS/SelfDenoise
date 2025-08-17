@@ -11,10 +11,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import cv2
-import glob
-from PIL import Image
-from torchvision import transforms
-from torch.utils.data import Dataset
 
 
 def get_timestamp():
@@ -232,50 +228,6 @@ class Masker(object):
         masks = masks.view(-1, 1, h, w)
         return tensors, masks
 
-
-# Dataset utilities
-class ImageDataset(Dataset):
-    """General image dataset for training"""
-
-    def __init__(self, data_dir, patch=256):
-        super().__init__()
-        self.data_dir = data_dir
-        self.patch = patch
-        self.image_files = glob.glob(os.path.join(self.data_dir, "*"))
-        self.image_files.sort()
-        print(f"Found {len(self.image_files)} samples for training")
-
-    def __getitem__(self, index):
-        # Fetch image
-        fn = self.image_files[index]
-        im = Image.open(fn)
-        im = np.array(im, dtype=np.float32)
-        H, W = im.shape[:2]
-        if H - self.patch > 0:
-            xx = np.random.randint(0, H - self.patch)
-            im = im[xx : xx + self.patch, :, :]
-        if W - self.patch > 0:
-            yy = np.random.randint(0, W - self.patch)
-            im = im[:, yy : yy + self.patch, :]
-
-        transformer = transforms.Compose([transforms.ToTensor()])
-        im = transformer(im)
-        return im
-
-    def __len__(self):
-        return len(self.image_files)
-
-
-def load_validation_data(dataset_dir):
-    """Load validation dataset"""
-    fns = glob.glob(os.path.join(dataset_dir, "*"))
-    fns.sort()
-    images = []
-    for fn in fns:
-        im = Image.open(fn)
-        im = np.array(im, dtype=np.float32)
-        images.append(im)
-    return images
 
 
 # Evaluation metrics

@@ -7,6 +7,7 @@ from PIL import Image
 from torchvision import transforms
 
 import utils
+import dataset
 from model import uformer
 
 
@@ -84,7 +85,7 @@ def create_model(args, logger):
 def load_test_data(args):
     """Load test dataset"""
     data_dir = os.path.join(args.test_dirs, "data_srs")
-    test_dict = {"data_srs": utils.load_validation_data(data_dir)}
+    test_dict = {"data_srs": dataset.load_validation_data(data_dir)}
     return test_dict
 
 

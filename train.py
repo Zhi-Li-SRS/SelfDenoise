@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 from PIL import Image
 from torchvision import transforms
 import utils
+import dataset
 from model import uformer
 
 
@@ -98,14 +99,14 @@ def create_model(args):
 def create_data_loaders(args):
     """Create training and validation data loaders"""
     # Training dataset
-    training_dataset = utils.ImageDataset(args.data_dir, patch=args.patchsize)
+    training_dataset = dataset.ImageDataset(args.data_dir, patch=args.patchsize)
     training_loader = DataLoader(
         dataset=training_dataset, num_workers=0, batch_size=4, shuffle=True, pin_memory=False, drop_last=True
     )
 
     # Validation dataset
     data_dir = os.path.join(args.val_dirs, "data_srs")
-    valid_dict = {"data_srs": utils.load_validation_data(data_dir)}
+    valid_dict = {"data_srs": dataset.load_validation_data(data_dir)}
 
     return training_loader, valid_dict
 
