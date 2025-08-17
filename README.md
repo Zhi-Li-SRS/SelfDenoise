@@ -1,4 +1,4 @@
-# Self-Supervised Denoising of Tiff images by UNet-based Blind Spot model (Unet-Transfoermr is optional)
+# Self-Supervised Denoising of Nonlinear Microscopy Images by UNet-based Blind Spot model (Unet-Transfoermr is optional)
 
 **Official Pytorch implementation of the model.**
 
