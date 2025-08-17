@@ -1,6 +1,5 @@
 # Self-Supervised Denoising of Nonlinear Microscopy Images by UNet-based Blind Spot model (Unet-Transfoermr is optional)
 
-**Official Pytorch implementation of the model.**
 
 ## Preparing Training Dataset
 
