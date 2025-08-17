@@ -28,7 +28,7 @@ def create_parser():
     parser.add_argument(
         "--noisetype",
         type=str,
-        default="poisson30",
+        default="gauss25",
         choices=["gauss25", "gauss5_50", "poisson30", "poisson5_50"],
     )
     parser.add_argument("--n_feature", type=int, default=48, help="Base number of features in UNet")
@@ -36,10 +36,10 @@ def create_parser():
     parser.add_argument("--depth", type=int, default=5, help="Depth of UNet (number of downsampling layers)")
 
     # Training arguments
-    parser.add_argument("--lr", type=float, default=1e-6, help="Learning rate")
-    parser.add_argument("--w_decay", type=float, default=1e-8, help="Weight decay")
+    parser.add_argument("--lr", type=float, default=1e-7, help="Learning rate")
+    parser.add_argument("--w_decay", type=float, default=1e-9, help="Weight decay")
     parser.add_argument("--gamma", type=float, default=0.5, help="LR scheduler gamma")
-    parser.add_argument("--n_epoch", type=int, default=200, help="Number of epochs")
+    parser.add_argument("--n_epoch", type=int, default=500, help="Number of epochs")
     parser.add_argument("--batchsize", type=int, default=4, help="Batch size")
     parser.add_argument("--patchsize", type=int, default=256, help="Patch size for training")
 
@@ -62,7 +62,7 @@ def create_parser():
 
     # Output arguments
     parser.add_argument("--save_model_path", type=str, default="./experiments", help="Model save path")
-    parser.add_argument("--log_name", type=str, default="selfdenoise_training", help="Log name")
+    parser.add_argument("--log_name", type=str, default="selfdenoise_TPF", help="Log name")
     parser.add_argument("--n_snapshot", type=int, default=50, help="Save model every n epochs")
 
     # System arguments
@@ -443,8 +443,6 @@ def main():
         if epoch % opt.n_snapshot == 0 or epoch == opt.n_epoch:
             # Save checkpoint
             util.save_network(network, epoch, "model", opt.save_path)
-            util.save_state(epoch, optimizer, scheduler, opt.save_path)
-
             # Validation
             validate_model(network, masker, valid_data, epoch, opt, logger, systime)
 

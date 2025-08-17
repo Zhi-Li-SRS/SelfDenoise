@@ -261,7 +261,7 @@ if __name__ == "__main__":
         "--test_dir", type=str, default="data/test", help="Directory containing .tif test images"
     )
     parser.add_argument(
-        "--checkpoint", type=str, default="ckpt/srs_epoch_200.pth", help="Path to model checkpoint"
+        "--checkpoint", type=str, default="ckpt/checkpoint.pth", help="Path to model checkpoint"
     )
     parser.add_argument(
         "--output_dir", type=str, default="predict", help="Directory to save processed images"
