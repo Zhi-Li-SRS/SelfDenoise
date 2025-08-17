@@ -239,10 +239,26 @@ def validate_model(network, valid_dict, masker, args, epoch, systime, logger):
                 if epoch == args.n_snapshot:
                     noisy255 = np.clip(noisy_im * 255.0 + 0.5, 0, 255).astype(np.uint8)
 
-                # Prepare input
+                # Prepare input - use same patch size as training
                 H, W = noisy_im.shape[:2]
-                val_size = (max(H, W) + 31) // 32 * 32
-                noisy_im = np.pad(noisy_im, [[0, val_size - H], [0, val_size - W], [0, 0]], "reflect")
+                patch_size = args.patchsize if hasattr(args, 'patchsize') else 128
+                
+                # Center crop to patch_size x patch_size like in training
+                start_h = max(0, (H - patch_size) // 2)
+                start_w = max(0, (W - patch_size) // 2)
+                end_h = min(H, start_h + patch_size)
+                end_w = min(W, start_w + patch_size)
+                
+                noisy_im = noisy_im[start_h:end_h, start_w:end_w]
+                # Also crop origin255 to match the patch
+                origin255 = origin255[start_h:end_h, start_w:end_w]
+                
+                # Pad to patch_size if image is smaller
+                if noisy_im.shape[0] < patch_size or noisy_im.shape[1] < patch_size:
+                    pad_h = max(0, patch_size - noisy_im.shape[0])
+                    pad_w = max(0, patch_size - noisy_im.shape[1])
+                    noisy_im = np.pad(noisy_im, [[0, pad_h], [0, pad_w], [0, 0]], "reflect")
+                    origin255 = np.pad(origin255, [[0, pad_h], [0, pad_w], [0, 0]], "reflect")
 
                 # Convert to tensor
 

@@ -89,37 +89,136 @@ def load_test_data(args):
     return test_dict
 
 
-def process_image(image, network, masker, beta):
-    """Process a single image through the model"""
+def process_image_patch_based(image, network, masker, beta, patch_size=128, overlap=32):
+    """Process a large image using patch-based inference with overlap"""
     origin255 = image.copy().astype(np.uint8)
     im = np.array(image, dtype=np.float32) / 255.0
-    noisy_im = im
-
-    H, W = noisy_im.shape[:2]
-    val_size = (max(H, W) + 31) // 32 * 32
-    noisy_im = np.pad(noisy_im, [[0, val_size - H], [0, val_size - W], [0, 0]], "reflect")
-
-    # Convert to tensor
+    
+    H, W = im.shape[:2]
+    
+    # Initialize output arrays
+    pred_dn_full = np.zeros_like(im)
+    pred_exp_full = np.zeros_like(im)
+    weight_map = np.zeros((H, W), dtype=np.float32)
+    
+    # Calculate stride (patch_size - overlap)
+    stride = patch_size - overlap
+    
     transformer = transforms.Compose([transforms.ToTensor()])
-    noisy_im = transformer(noisy_im).unsqueeze(0).cuda()
-
+    
     with torch.no_grad():
-        n, c, h, w = noisy_im.shape
-        net_input, mask = masker.train(noisy_im)
-        noisy_output = (network(net_input) * mask).view(n, -1, c, h, w).sum(dim=1)
+        for y in range(0, H, stride):
+            for x in range(0, W, stride):
+                # Calculate patch boundaries
+                y_end = min(y + patch_size, H)
+                x_end = min(x + patch_size, W)
+                y_start = y_end - patch_size if y_end - y >= patch_size else max(0, y_end - patch_size)
+                x_start = x_end - patch_size if x_end - x >= patch_size else max(0, x_end - patch_size)
+                
+                # Extract patch
+                patch = im[y_start:y_start+patch_size, x_start:x_start+patch_size]
+                
+                # Pad if necessary
+                if patch.shape[0] < patch_size or patch.shape[1] < patch_size:
+                    pad_h = patch_size - patch.shape[0]
+                    pad_w = patch_size - patch.shape[1]
+                    patch = np.pad(patch, [[0, pad_h], [0, pad_w], [0, 0]], "reflect")
+                
+                # Convert to tensor
+                patch_tensor = transformer(patch).unsqueeze(0).cuda()
+                
+                # Process patch
+                n, c, h, w = patch_tensor.shape
+                net_input, mask = masker.train(patch_tensor)
+                patch_dn = (network(net_input) * mask).view(n, -1, c, h, w).sum(dim=1)
+                patch_exp = network(patch_tensor)
+                
+                # Convert back to numpy
+                patch_dn = patch_dn.permute(0, 2, 3, 1).cpu().data.clamp(0, 1).numpy().squeeze(0)
+                patch_exp = patch_exp.permute(0, 2, 3, 1).cpu().data.clamp(0, 1).numpy().squeeze(0)
+                
+                # Calculate valid region (excluding padding)
+                valid_h = min(patch_size, H - y_start)
+                valid_w = min(patch_size, W - x_start)
+                
+                # Add to full image with weight
+                weight = np.ones((valid_h, valid_w), dtype=np.float32)
+                
+                # Apply overlapping weight (cosine taper)
+                if overlap > 0:
+                    # Taper edges
+                    taper_size = min(overlap // 2, valid_h // 4, valid_w // 4)
+                    if taper_size > 0:
+                        for i in range(taper_size):
+                            weight_val = 0.5 * (1 + np.cos(np.pi * i / taper_size))
+                            if y_start > 0:  # Top edge
+                                weight[i, :] *= weight_val
+                            if x_start > 0:  # Left edge
+                                weight[:, i] *= weight_val
+                            if y_start + valid_h < H:  # Bottom edge
+                                weight[valid_h-1-i, :] *= weight_val
+                            if x_start + valid_w < W:  # Right edge
+                                weight[:, valid_w-1-i] *= weight_val
+                
+                # Accumulate results
+                pred_dn_full[y_start:y_start+valid_h, x_start:x_start+valid_w] += patch_dn[:valid_h, :valid_w] * weight[:, :, np.newaxis]
+                pred_exp_full[y_start:y_start+valid_h, x_start:x_start+valid_w] += patch_exp[:valid_h, :valid_w] * weight[:, :, np.newaxis]
+                weight_map[y_start:y_start+valid_h, x_start:x_start+valid_w] += weight
+    
+    # Normalize by weight
+    weight_map[weight_map == 0] = 1  # Avoid division by zero
+    pred_dn_full = pred_dn_full / weight_map[:, :, np.newaxis]
+    pred_exp_full = pred_exp_full / weight_map[:, :, np.newaxis]
+    
+    # Combine outputs
+    pred_mid_full = (pred_dn_full + beta * pred_exp_full) / (1 + beta)
+    
+    return pred_dn_full, pred_exp_full, pred_mid_full
 
-        # Get expected output
-        exp_output = network(noisy_im)
 
-    # Crop back to original size
-    pred_dn = noisy_output[:, :, :H, :W]
-    pred_exp = exp_output[:, :, :H, :W]
-    pred_mid = (pred_dn + beta * pred_exp) / (1 + beta)
+def process_image(image, network, masker, beta):
+    """Process a single image through the model - updated for large images"""
+    origin255 = image.copy().astype(np.uint8)
+    H, W = origin255.shape[:2]
+    
+    # Use patch-based inference for large images
+    if H > 256 or W > 256:
+        pred_dn, pred_exp, pred_mid = process_image_patch_based(image, network, masker, beta)
+    else:
+        # Original method for small images
+        im = np.array(image, dtype=np.float32) / 255.0
+        noisy_im = im
 
-    # Convert to numpy and process
-    pred_dn = pred_dn.permute(0, 2, 3, 1).cpu().data.clamp(0, 1).numpy().squeeze(0)
-    pred_exp = pred_exp.permute(0, 2, 3, 1).cpu().data.clamp(0, 1).numpy().squeeze(0)
-    pred_mid = pred_mid.permute(0, 2, 3, 1).cpu().data.clamp(0, 1).numpy().squeeze(0)
+        # Pad to training patch size
+        patch_size = 128
+        if H < patch_size or W < patch_size:
+            pad_h = max(0, patch_size - H)
+            pad_w = max(0, patch_size - W)
+            noisy_im = np.pad(noisy_im, [[0, pad_h], [0, pad_w], [0, 0]], "reflect")
+
+        # Convert to tensor
+        transformer = transforms.Compose([transforms.ToTensor()])
+        noisy_im = transformer(noisy_im).unsqueeze(0).cuda()
+
+        with torch.no_grad():
+            n, c, h, w = noisy_im.shape
+            net_input, mask = masker.train(noisy_im)
+            noisy_output = (network(net_input) * mask).view(n, -1, c, h, w).sum(dim=1)
+
+            # Get expected output
+            exp_output = network(noisy_im)
+
+        # Crop back to original size
+        pred_dn = noisy_output[:, :, :H, :W]
+        pred_exp = exp_output[:, :, :H, :W]
+        pred_mid = (pred_dn + beta * pred_exp) / (1 + beta)
+        
+        # Convert to numpy
+        pred_dn = pred_dn.permute(0, 2, 3, 1).cpu().data.clamp(0, 1).numpy().squeeze(0)
+        pred_exp = pred_exp.permute(0, 2, 3, 1).cpu().data.clamp(0, 1).numpy().squeeze(0)
+        pred_mid = pred_mid.permute(0, 2, 3, 1).cpu().data.clamp(0, 1).numpy().squeeze(0)
+
+    # pred_dn, pred_exp, pred_mid are already numpy arrays from either branch above
 
     # Convert to uint8
     pred255_dn = np.clip(pred_dn * 255.0 + 0.5, 0, 255).astype(np.uint8)
