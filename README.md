@@ -2,7 +2,7 @@
 
 ## Results
 
-### Example Denoising Results
+### Denoising Results (Under Same Contrast)
 
 <table>
   <tr>
@@ -10,7 +10,7 @@
     <th>Denoised</th>
   </tr>
   <tr>
-    <td><img src="asset/2-794.6.png" alt="Original noisy image" width="100%"/></td>
+    <td><img src="asset/2-794.6.png" alt="Raw image" width="100%"/></td>
     <td><img src="asset/2-794.6_denoised.png" alt="Denoised image" width="100%"/></td>
   </tr>
 </table>
