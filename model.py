@@ -46,7 +46,9 @@ class TopkRouting(nn.Module):
             query, key = query.detach(), key.detach()
         query_hat, key_hat = self.emb(query), self.emb(key)
         attn_logit = (query_hat * self.scale) @ key_hat.transpose(-2, -1)
-        topk_attn_logit, topk_index = torch.topk(attn_logit, k=self.topk, dim=-1)
+        # Ensure topk doesn't exceed the available dimension size
+        actual_topk = min(self.topk, attn_logit.size(-1))
+        topk_attn_logit, topk_index = torch.topk(attn_logit, k=actual_topk, dim=-1)
         r_weight = self.routing_act(topk_attn_logit)
 
         return r_weight, topk_index
@@ -137,7 +139,9 @@ class BiLevelRoutingAttention(nn.Module):
         )
 
         ################ global routing setting #################
-        self.topk = topk
+        # Ensure topk doesn't exceed maximum possible windows (n_win^2)
+        max_windows = n_win * n_win
+        self.topk = min(topk, max_windows)
         self.param_routing = param_routing
         self.diff_routing = diff_routing
         self.soft_routing = soft_routing
@@ -316,6 +320,7 @@ class biTransformerBlock(nn.Module):
         drop_path=0.0,
         act_layer=nn.GELU,
         norm_layer=nn.LayerNorm,
+        use_checkpoint=False,
     ):
         super().__init__()
         self.dim = dim
@@ -324,6 +329,7 @@ class biTransformerBlock(nn.Module):
         self.window_size = window_size
         self.shift_size = shift_size
         self.mlp_ratio = mlp_ratio
+        self.use_checkpoint = use_checkpoint
         if min(self.input_resolution) <= self.window_size:
             self.shift_size = 0
             self.window_size = min(self.input_resolution)
@@ -380,18 +386,38 @@ class biTransformerBlock(nn.Module):
                     img_mask[:, h, w, :] = cnt
                     cnt += 1
 
+    def _attention_forward(self, x, H, W):
+        """Helper function for attention computation"""
+        B, L, C = x.shape
+        x = self.norm1(x)
+        x = x.view(B, H, W, C)
+        x = self.attn(x)
+        x = x.view(B, -1, C)
+        return x
+    
+    def _mlp_forward(self, x):
+        """Helper function for MLP computation"""
+        return self.mlp(self.norm2(x))
+
     def forward(self, x):
         H, W = self.input_resolution
         B, L, C = x.shape
 
         shortcut = x
 
-        x = self.norm1(x)
-        x = x.view(B, H, W, C)
-        x = self.attn(x)
-        x = x.view(B, -1, C)
-        x = shortcut + self.drop_path(x)
-        x = x + self.drop_path(self.mlp(self.norm2(x)))
+        if self.use_checkpoint and x.requires_grad:
+            attn_output = checkpoint.checkpoint(self._attention_forward, x, H, W, use_reentrant=False)
+        else:
+            attn_output = self._attention_forward(x, H, W)
+        
+        x = shortcut + self.drop_path(attn_output)
+        
+        if self.use_checkpoint and x.requires_grad:
+            mlp_output = checkpoint.checkpoint(self._mlp_forward, x, use_reentrant=False)
+        else:
+            mlp_output = self._mlp_forward(x)
+        
+        x = x + self.drop_path(mlp_output)
 
         return x  # (B, H*W, C)
 
@@ -545,6 +571,7 @@ class BasicLayer(nn.Module):
                     drop=drop,
                     drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path,
                     norm_layer=norm_layer,
+                    use_checkpoint=True,
                 )
                 for i in range(depth)
             ]
@@ -614,6 +641,7 @@ class BasicLayer_up(nn.Module):
                     drop=drop,
                     drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path,
                     norm_layer=norm_layer,
+                    use_checkpoint=True,
                 )
                 for i in range(depth)
             ]
@@ -637,7 +665,7 @@ class BasicLayer_up(nn.Module):
 
 class PatchEmbed(nn.Module):
 
-    def __init__(self, img_size=256, patch_size=4, in_chans=3, embed_dim=128, norm_layer=None):
+    def __init__(self, img_size=128, patch_size=4, in_chans=3, embed_dim=128, norm_layer=None):
         super().__init__()
         img_size = to_2tuple(img_size)
         patch_size = to_2tuple(patch_size)
@@ -675,7 +703,7 @@ class biuformer(nn.Module):
 
     def __init__(
         self,
-        img_size=256,
+        img_size=128,
         patch_size=4,
         in_chans=3,
         out_chans=3,
@@ -906,13 +934,13 @@ class uformer(nn.Module):
         super(uformer, self).__init__()
         self.config = config
         self.bi_uformer = biuformer(
-            img_size=256,
+            img_size=128,
             patch_size=4,
             in_chans=3,
             out_chans=3,
             embed_dim=128,
-            depths=[8, 8, 8, 8],
-            num_heads=[8, 8, 8, 8],
+            depths=[4, 4, 4, 4],
+            num_heads=[4, 4, 4, 4],
             window_size=8,
             mlp_ratio=4.0,
             qkv_bias=True,

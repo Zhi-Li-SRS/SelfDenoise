@@ -39,7 +39,7 @@ def parse_args():
     parser.add_argument("--lr", type=float, default=2e-6, help="Learning rate")
     parser.add_argument("--w_decay", type=float, default=1e-8, help="Weight decay")
     parser.add_argument("--gamma", type=float, default=0.5, help="Learning rate decay factor")
-    parser.add_argument("--patchsize", type=int, default=256, help="Training patch size")
+    parser.add_argument("--patchsize", type=int, default=128, help="Training patch size")
     parser.add_argument("--n_channel", type=int, default=3, help="Number of input channels")
 
     # Loss arguments
@@ -101,7 +101,7 @@ def create_data_loaders(args):
     # Training dataset
     training_dataset = dataset.ImageDataset(args.data_dir, patch=args.patchsize)
     training_loader = DataLoader(
-        dataset=training_dataset, num_workers=0, batch_size=4, shuffle=True, pin_memory=False, drop_last=True
+        dataset=training_dataset, num_workers=0, batch_size=2, shuffle=True, pin_memory=False, drop_last=True
     )
 
     # Validation dataset
@@ -185,6 +185,9 @@ def train_epoch(network, training_loader, optimizer, masker, args, epoch, logger
         # Backward pass
         loss_all.backward()
         optimizer.step()
+
+        # Clear GPU cache to prevent memory accumulation
+        torch.cuda.empty_cache()
 
         # Log progress
         logger.info(
@@ -379,8 +382,11 @@ def main():
             logger.info("----------------------------------------------------")
 
     logger.info("Training initialized successfully")
-    print("Batchsize={}, number of epoch={}".format(4, args.n_epoch))
+    print("Batchsize={}, number of epoch={}".format(2, args.n_epoch))
 
+    # Clear GPU cache before training
+    torch.cuda.empty_cache()
+    
     # Training loop
     for epoch in range(epoch_init, args.n_epoch + 1):
         # Train one epoch

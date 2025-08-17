@@ -10,7 +10,7 @@ from torch.utils.data import Dataset
 class ImageDataset(Dataset):
     """General image dataset for training"""
 
-    def __init__(self, data_dir, patch=256):
+    def __init__(self, data_dir, patch=128):
         super().__init__()
         self.data_dir = data_dir
         self.patch = patch
