@@ -1,11 +1,7 @@
 # Image files
 *.tif
 *.tiff
-*.png
-*.jpg
-*.jpeg
-*.bmp
-*.gif
+
 
 # Python cache
 __pycache__/
