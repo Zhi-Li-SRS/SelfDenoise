@@ -14,10 +14,10 @@ from torchvision import transforms
 from torch.utils.data import DataLoader as TorchDataLoader
 from tqdm import tqdm
 
-from model import UNet
-import utils as util
-from masking import Masker
-from data_loader import DataLoader, validation_data
+from src.model import UNet
+import src.utils as util
+from src.masking import Masker  
+from src.data_loader import DataLoader, validation_data
 
 
 def create_parser():

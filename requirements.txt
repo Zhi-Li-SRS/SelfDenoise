@@ -1,0 +1,7 @@
+# Minimal compatible versions; install PyTorch separately
+numpy>=1.23
+pillow>=9.0
+scikit-image>=0.21
+tqdm>=4.64
+scipy>=1.9
+opencv-python>=4.7

@@ -1,3 +1,6 @@
+# Ignore gitignore file
+*.gitignore
+
 # Image files
 *.tif
 *.tiff

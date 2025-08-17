@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "selfdenoise"
+version = "0.1.1"
+description = "Self-supervised image denoising (training and inference)"
+readme = "README.md"
+requires-python = ">=3.8"
+keywords = ["denoising", "computer-vision", "pytorch", "self-supervised"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: Other/Proprietary License",
+  "Operating System :: OS Independent",
+]
+dependencies = [
+  # Keep PyTorch out of mandatory deps to avoid CUDA wheel pitfalls
+  "numpy>=1.23",
+  "pillow>=9.0,
+  "scikit-image>=0.21",
+  "tqdm>=4.64",
+  "scipy>=1.9",
+  "opencv-python>=4.7",
+]
+
+[project.scripts]
+selfdenoise-train = "train:main"
+selfdenoise-infer = "infer:main"
+
+[project.optional-dependencies]
+# Optional: install CPU wheels from PyPI. For CUDA, prefer PyTorch's website.
+pytorch = [
+  "torch>=2.0",
+  "torchvision>=0.15",
+]
+
+[tool.setuptools]
+include-package-data = false
+zip-safe = false
+py-modules = ["data_loader", "masking", "model", "utils", "infer", "train"]
+

@@ -8,7 +8,7 @@ from torchvision import transforms
 from tqdm import tqdm
 from collections import OrderedDict
 
-from model import UNet
+from src.model import UNet
 
 
 class Masker(object):
@@ -253,7 +253,7 @@ def process_tif_images(
     print(f"Processing complete! Results saved to {output_dir}")
 
 
-if __name__ == "__main__":
+def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Denoise .tif images")
@@ -273,3 +273,7 @@ if __name__ == "__main__":
     process_tif_images(
         test_dir=args.test_dir, ckpt_path=args.checkpoint, output_dir=args.output_dir, beta=args.beta
     )
+
+
+if __name__ == "__main__":
+    main()

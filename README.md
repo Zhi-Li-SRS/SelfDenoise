@@ -1,24 +1,41 @@
-# Self-Supervised Denoising of TPF and SRS images by Transformer-based Blind Spot model
+# Self-Supervised Denoising of Tiff images by UNet-based Blind Spot model (Unet-Transfoermr is optional)
 
 **Official Pytorch implementation of the model.**
 
 ## Preparing Training Dataset
 
-The field of view of each THG image is 512 × 512 and the intensities of all images were scaled to [0, 255].Because of limited computational resource, each THG image having 512 × 512 pixels was divided into 2×2 smaller images having 256 × 256 pixels.
+The field of view of each image is 512 × 512 and the intensities of all images were normalized during the training.
 
-## Training
 
-To train a network, run:
+## Installation
+
+Install the package in editable mode for development:
 
 ```bash
-python train.py 
+pip install -e .
 ```
-- selected optional arguments:
-  - `data_dir` Path to the training set
-  - `val_dirs` Path to the validation sets
-  - `noisetype` Distribution of image noise, choosing from `gauss25`, `gauss5_50`, `poisson30`, or `poisson5_50`
-  - `save_model_path` Base-path to the saved files
-  - `log_name` Path to the saved files
-  
 
+Or install with dependencies from `requirements.txt` first:
 
+```bash
+pip install -r requirements.txt
+pip install -e .
+```
+
+Note: Installing PyTorch may require selecting the right extra index for your CUDA version. See https://pytorch.org/get-started/locally/ if the default wheel does not match your environment.
+
+## CLI Usage
+
+After installation, the following commands are available:
+
+- `selfdenoise-train`: runs the training entrypoint (same args as `python train.py`).
+- `selfdenoise-infer`: runs inference on a folder of `.tif` images.
+
+Examples:
+```bash
+# Train
+selfdenoise-train --data_dir ./data/train --val_dirs ./data/validation --n_epoch 100
+
+# Inference
+selfdenoise-infer --test_dir ./data/test --checkpoint ./ckpt/checkpoint.pth --output_dir ./predict
+```
