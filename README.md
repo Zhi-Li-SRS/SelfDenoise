@@ -1,18 +1,18 @@
-# Self-Supervised Denoising of Nonlinear Microscopy Images by UNet-based Blind Spot model (Unet-Transfoermr is optional)
+# Self-Supervised Denoising of Nonlinear Microscopy Images by UNet-based Blind Spot model (UNet-Transformer optional)
 
 ## Results
 
 ### Example Denoising Results
 
 <table>
-<tr>
-<td><b>Original Image</b></td>
-<td><b>Denoised Image</b></td>
-</tr>
-<tr>
-<td><img src="asset/2-794.6.png" alt="Original noisy image" width="256"/></td>
-<td><img src="asset/2-794.6_denoised.png" alt="Denoised image" width="256"/></td>
-</tr>
+  <tr>
+    <th>Original</th>
+    <th>Denoised</th>
+  </tr>
+  <tr>
+    <td><img src="asset/2-794.6.png" alt="Original noisy image" width="100%"/></td>
+    <td><img src="asset/2-794.6_denoised.png" alt="Denoised image" width="100%"/></td>
+  </tr>
 </table>
 
 ## Preparing Training Dataset
@@ -69,5 +69,5 @@ selfdenoise-infer --test_dir ./data/test --checkpoint ./ckpt/checkpoint.pth --ou
 
 ## Acknowledgments
 
-I would like to thank the authors of "Self-Supervised Image Denoising with Visible Blind Spots" for theirstrategies, which has significantly inspired and informed microscopy fields
+I would like to thank the authors of "Self-Supervised Image Denoising with Visible Blind Spots" for their strategies, which have significantly inspired and informed microscopy fields.
 
