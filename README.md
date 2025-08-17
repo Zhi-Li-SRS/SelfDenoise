@@ -39,3 +39,8 @@ selfdenoise-train --data_dir ./data/train --val_dirs ./data/validation --n_epoch
 # Inference
 selfdenoise-infer --test_dir ./data/test --checkpoint ./ckpt/checkpoint.pth --output_dir ./predict
 ```
+
+## Acknowledgments
+
+I would like to thank the authors of "Self-Supervised Image Denoising with Visible Blind Spots" for theirstrategies, which has significantly inspired and informed microscopy fields
+
