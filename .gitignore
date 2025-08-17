@@ -1,6 +1,3 @@
-# Ignore gitignore file
-*.gitignore
-
 # Image files
 *.tif
 *.tiff
@@ -9,10 +6,6 @@
 *.jpeg
 *.bmp
 *.gif
-
-
-# Data directories
-data/
 
 # Python cache
 __pycache__/
