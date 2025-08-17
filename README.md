@@ -2,7 +2,7 @@
 
 ## Results
 
-### Denoising Results (Under Same Contrast)
+### Denoising Inference Results (Under Same Contrast)
 
 <table>
   <tr>
