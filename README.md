@@ -1,8 +1,6 @@
 # Self-Supervised Denoising of Nonlinear Microscopy Images by UNet-based Blind Spot model (UNet-Transformer optional)
 
-## Results
-
-### Denoising Inference Results (Under Same Contrast)
+## Denoising Inference Results (Under Same Contrast)
 
 <table>
   <tr>
