@@ -15,27 +15,6 @@ import glob
 from PIL import Image
 from torchvision import transforms
 from torch.utils.data import Dataset
-import yaml
-
-try:
-    from yaml import CDumper as Dumper
-    from yaml import CLoader as Loader
-except ImportError:
-    from yaml import Dumper, Loader
-
-
-def OrderedYaml():
-    _mapping_tag = yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG
-
-    def dict_representer(dumper, data):
-        return dumper.represent_dict(data.items())
-
-    def dict_constructor(loader, node):
-        return OrderedDict(loader.construct_pairs(node))
-
-    Dumper.add_representer(OrderedDict, dict_representer)
-    Loader.add_constructor(_mapping_tag, dict_constructor)
-    return Loader, Dumper
 
 
 def get_timestamp():
@@ -55,16 +34,6 @@ def mkdirs(paths):
             mkdir(path)
 
 
-def mkdir_and_rename(path):
-    if os.path.exists(path):
-        new_name = path + "_archived_" + get_timestamp()
-        print("Path already exists. Rename it to [{:s}]".format(new_name))
-        logger = logging.getLogger("base")
-        logger.info("Path already exists. Rename it to [{:s}]".format(new_name))
-        os.rename(path, new_name)
-    os.makedirs(path)
-
-
 def set_random_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -72,18 +41,15 @@ def set_random_seed(seed):
     torch.cuda.manual_seed_all(seed)
 
 
-def setup_logger(
-    logger_name, root, phase, level=logging.INFO, screen=False, tofile=False
-):
+def setup_logger(logger_name, root, phase, level=logging.INFO, screen=False, tofile=False):
     """set up logger"""
     lg = logging.getLogger(logger_name)
     formatter = logging.Formatter(
-        "%(asctime)s.%(msecs)03d - %(levelname)s: %(message)s",
-        datefmt="%y-%m-%d %H:%M:%S",
+        "%(asctime)s.%(msecs)03d - %(levelname)s: %(message)s", datefmt="%y-%m-%d %H:%M:%S"
     )
     lg.setLevel(level)
     if tofile:
-        log_file = os.path.join(root, phase + "_{}.log".format(get_timestamp()))
+        log_file = os.path.join(root, f"phase_{get_timestamp()}.log")
         fh = logging.FileHandler(log_file, mode="w")
         fh.setFormatter(formatter)
         lg.addHandler(fh)
@@ -93,41 +59,40 @@ def setup_logger(
         lg.addHandler(sh)
 
 
-# Network utilities
 def save_network(network, save_path, epoch, name, logger=None):
     """Save network checkpoint"""
     model_dir = os.path.join(save_path, "models")
     os.makedirs(model_dir, exist_ok=True)
-    model_name = "epoch_{}_{:03d}.pth".format(name, epoch)
+    model_name = f"epoch_{name}_{epoch:03d}.pth"
     model_path = os.path.join(model_dir, model_name)
-    
+
     if isinstance(network, nn.DataParallel) or isinstance(network, nn.parallel.DistributedDataParallel):
         network = network.module
-    
+
     state_dict = network.state_dict()
     for key, param in state_dict.items():
         state_dict[key] = param.cpu()
-    
+
     torch.save(state_dict, model_path)
-    if logger:
-        logger.info("Checkpoint saved to {}".format(model_path))
+    if logger is not None:
+        logger.info(f"Checkpoint saved to {model_path}")
     else:
-        print("Checkpoint saved to {}".format(model_path))
-    
+        print(f"Checkpoint saved to {model_path}")
+
     return model_path
 
 
 def load_network(load_path, network, strict=True, logger=None):
     """Load network checkpoint"""
     assert load_path is not None
-    if logger:
-        logger.info("Loading model from [{:s}] ...".format(load_path))
+    if logger is not None:
+        logger.info(f"Loading model from [{load_path}] ...")
     else:
-        print("Loading model from [{:s}] ...".format(load_path))
-    
+        print(f"Loading model from [{load_path}] ...")
+
     if isinstance(network, nn.DataParallel) or isinstance(network, nn.parallel.DistributedDataParallel):
         network = network.module
-    
+
     load_net = torch.load(load_path)
     load_net_clean = OrderedDict()  # remove unnecessary 'module.'
     for k, v in load_net.items():
@@ -135,7 +100,7 @@ def load_network(load_path, network, strict=True, logger=None):
             load_net_clean[k[7:]] = v
         else:
             load_net_clean[k] = v
-    
+
     network.load_state_dict(load_net_clean, strict=strict)
     return network
 
@@ -230,7 +195,7 @@ def interpolate_mask(tensor, mask, mask_inv):
 
 class Masker(object):
     """Blind spot masker for self-supervised training"""
-    
+
     def __init__(self, width=4, mode="interpolate", mask_type="all"):
         self.width = width
         self.mode = mode
@@ -271,22 +236,20 @@ class Masker(object):
 # Dataset utilities
 class ImageDataset(Dataset):
     """General image dataset for training"""
-    
+
     def __init__(self, data_dir, patch=256):
-        super(ImageDataset, self).__init__()
+        super().__init__()
         self.data_dir = data_dir
         self.patch = patch
         self.image_files = glob.glob(os.path.join(self.data_dir, "*"))
         self.image_files.sort()
-        print("Found {} samples for training".format(len(self.image_files)))
+        print(f"Found {len(self.image_files)} samples for training")
 
     def __getitem__(self, index):
         # Fetch image
         fn = self.image_files[index]
         im = Image.open(fn)
         im = np.array(im, dtype=np.float32)
-        
-        # Random crop
         H, W = im.shape[:2]
         if H - self.patch > 0:
             xx = np.random.randint(0, H - self.patch)
@@ -294,8 +257,7 @@ class ImageDataset(Dataset):
         if W - self.patch > 0:
             yy = np.random.randint(0, W - self.patch)
             im = im[:, yy : yy + self.patch, :]
-        
-        # Convert to tensor
+
         transformer = transforms.Compose([transforms.ToTensor()])
         im = transformer(im)
         return im
@@ -341,7 +303,7 @@ def ssim(prediction, target):
 
 def calculate_ssim(target, ref):
     """
-    Calculate SSIM - same outputs as MATLAB's
+    Calculate SSIM
     img1, img2: [0, 255]
     """
     img1 = np.array(target, dtype=np.float64)
@@ -369,5 +331,3 @@ def calculate_psnr(target, ref, data_range=255.0):
     diff = img1 - img2
     psnr = 10.0 * np.log10(data_range**2 / np.mean(np.square(diff)))
     return psnr
-
-
