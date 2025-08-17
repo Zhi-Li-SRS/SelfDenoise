@@ -10,9 +10,20 @@ from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader
 from PIL import Image
 from torchvision import transforms
-import utils
-import dataset
-from model import uformer
+import wandb
+from skimage import io
+import psutil
+
+try:
+    import GPUtil
+
+    GPU_AVAILABLE = True
+except ImportError:
+    GPU_AVAILABLE = False
+
+import src.utils as utils
+import src.dataset as dataset
+from src.model import uformer
 
 
 def parse_args():
@@ -66,23 +77,55 @@ def parse_args():
 
 
 def setup_training(args):
-    """Setup training environment"""
+    """Setup training environment with Weights & Biases"""
     # Set up timestamp and paths
     systime = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M")
-    args.save_path = os.path.join(args.save_model_path, args.log_name, systime)
+    args.save_path = os.path.join(args.save_model_path, systime)
     os.makedirs(args.save_path, exist_ok=True)
 
     # Set up CUDA
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_devices
     torch.set_num_threads(6)
 
-    # Set up logger
-    utils.setup_logger(
-        "train", args.save_path, "train_" + args.log_name, level=logging.INFO, screen=True, tofile=True
+    # Initialize Weights & Biases
+    wandb.init(
+        project="self-denoise",
+        name=f"{args.log_name}_{systime}",
+        config={
+            "data_dir": args.data_dir,
+            "val_dirs": args.val_dirs,
+            "noisetype": args.noisetype,
+            "learning_rate": args.lr,
+            "epochs": args.n_epoch,
+            "patch_size": args.patchsize,
+            "n_channel": args.n_channel,
+            "lambda1": args.Lambda1,
+            "lambda2": args.Lambda2,
+            "increase_ratio": args.increase_ratio,
+            "weight_decay": args.w_decay,
+            "gamma": args.gamma,
+            "batch_size": 2,
+            "n_snapshot": args.n_snapshot,
+            "optimizer": "Adam",
+            "scheduler": "MultiStepLR",
+            "masker_width": 4,
+            "masker_mode": "interpolate",
+            "architecture": "uformer",
+            "save_path": args.save_path,
+        },
+        save_code=True,
+        tags=[args.noisetype, "self-supervised"],
     )
-    logger = logging.getLogger("train")
 
-    return systime, logger
+    # Create models directory for wandb
+    models_dir = os.path.join(args.save_path, "models")
+    os.makedirs(models_dir, exist_ok=True)
+
+    print(f"🚀 Started W&B run: {wandb.run.name}")
+    print(f"📁 Saving to: {args.save_path}")
+    print(f"🔗 View at: {wandb.run.url}")
+
+    return systime
 
 
 def create_model(args):
@@ -101,7 +144,7 @@ def create_data_loaders(args):
     # Training dataset
     training_dataset = dataset.ImageDataset(args.data_dir, patch=args.patchsize)
     training_loader = DataLoader(
-        dataset=training_dataset, num_workers=0, batch_size=2, shuffle=True, pin_memory=False, drop_last=True
+        dataset=training_dataset, num_workers=0, batch_size=4, shuffle=True, pin_memory=False, drop_last=True
     )
 
     # Validation dataset
@@ -147,19 +190,21 @@ def get_loss_weights(epoch, args):
     return alpha, beta
 
 
-def train_epoch(network, training_loader, optimizer, masker, args, epoch, logger):
-    """Train for one epoch"""
+def train_epoch(network, training_loader, optimizer, masker, args, epoch):
+    """Train for one epoch with W&B logging"""
     network.train()
 
     for param_group in optimizer.param_groups:
         current_lr = param_group["lr"]
-    print("LearningRate of Epoch {} = {}".format(epoch, current_lr))
+    print(f"Epoch {epoch} - Learning Rate: {current_lr:.2e}")
 
     alpha, beta = get_loss_weights(epoch, args)
+    epoch_losses = {"reg": [], "rev": [], "total": [], "diff": [], "exp_diff": []}
 
     for iteration, clean in enumerate(training_loader):
         st = time.time()
-        clean = clean / 255.0
+        # TIFF images are already in proper float32 format from dataset
+        # No need to divide by 255 as they're processed correctly in dataset.py
         noisy = clean.cuda()
 
         optimizer.zero_grad()
@@ -189,23 +234,30 @@ def train_epoch(network, training_loader, optimizer, masker, args, epoch, logger
         # Clear GPU cache to prevent memory accumulation
         torch.cuda.empty_cache()
 
-        # Log progress
-        logger.info(
-            "{:04d} {:05d} diff={:.6f}, exp_diff={:.6f}, Loss_Reg={:.6f}, Lambda={:.3f}, Loss_Rev={:.6f}, Loss_All={:.6f}, Time={:.4f}".format(
-                epoch,
-                iteration,
-                torch.mean(diff**2).item(),
-                torch.mean(exp_diff**2).item(),
-                loss_reg.item(),
-                epoch / args.n_epoch,
-                loss_rev.item(),
-                loss_all.item(),
-                time.time() - st,
-            )
-        )
+        # Collect losses for epoch averaging
+        epoch_losses["reg"].append(loss_reg.item())
+        epoch_losses["rev"].append(loss_rev.item())
+        epoch_losses["total"].append(loss_all.item())
+        epoch_losses["diff"].append(torch.mean(diff**2).item())
+        epoch_losses["exp_diff"].append(torch.mean(exp_diff**2).item())
+
+    # Log epoch averages
+    avg_losses = {k: np.mean(v) for k, v in epoch_losses.items()}
+    wandb.log(
+        {
+            "epoch_avg/loss_reg": avg_losses["reg"],
+            "epoch_avg/loss_rev": avg_losses["rev"],
+            "epoch_avg/loss_total": avg_losses["total"],
+            "epoch_avg/diff_squared": avg_losses["diff"],
+            "epoch_avg/exp_diff_squared": avg_losses["exp_diff"],
+            "epoch": epoch,
+        }
+    )
+
+    return avg_losses
 
 
-def validate_model(network, valid_dict, masker, args, epoch, systime, logger):
+def validate_model(network, valid_dict, masker, args, epoch, systime):
     """Validate the model"""
     network.eval()
 
@@ -232,27 +284,41 @@ def validate_model(network, valid_dict, masker, args, epoch, systime, logger):
 
         for i in range(repeat_times):
             for idx, im in enumerate(valid_images):
-                origin255 = im.copy().astype(np.uint8)
-                im = np.array(im, dtype=np.float32) / 255.0
+                # Handle TIFF files properly - they're already in float32 format
+                if im.max() > 1.0:  # TIFF format, original range preserved
+                    # Normalize for processing while preserving precision
+                    im_max = im.max()
+                    noisy_im_raw = im / im_max if im_max > 0 else im
+                    # For display, convert to 0-255 range
+                    origin255 = (
+                        np.clip(im * 255.0 / im_max, 0, 255).astype(np.uint8)
+                        if im_max > 0
+                        else im.astype(np.uint8)
+                    )
+                else:  # Already normalized (PNG/JPG)
+                    noisy_im_raw = im
+                    origin255 = np.clip(im * 255.0, 0, 255).astype(np.uint8)
+
+                im = noisy_im_raw
                 noisy_im = im
 
                 if epoch == args.n_snapshot:
-                    noisy255 = np.clip(noisy_im * 255.0 + 0.5, 0, 255).astype(np.uint8)
+                    noisy255 = np.clip(noisy_im * 255.0, 0, 255).astype(np.uint8)
 
                 # Prepare input - use same patch size as training
                 H, W = noisy_im.shape[:2]
-                patch_size = args.patchsize if hasattr(args, 'patchsize') else 128
-                
+                patch_size = args.patchsize if hasattr(args, "patchsize") else 128
+
                 # Center crop to patch_size x patch_size like in training
                 start_h = max(0, (H - patch_size) // 2)
                 start_w = max(0, (W - patch_size) // 2)
                 end_h = min(H, start_h + patch_size)
                 end_w = min(W, start_w + patch_size)
-                
+
                 noisy_im = noisy_im[start_h:end_h, start_w:end_w]
                 # Also crop origin255 to match the patch
                 origin255 = origin255[start_h:end_h, start_w:end_w]
-                
+
                 # Pad to patch_size if image is smaller
                 if noisy_im.shape[0] < patch_size or noisy_im.shape[1] < patch_size:
                     pad_h = max(0, patch_size - noisy_im.shape[0])
@@ -300,10 +366,10 @@ def validate_model(network, valid_dict, masker, args, epoch, systime, logger):
                 del exp_output
                 torch.cuda.empty_cache()
 
-                # Convert to uint8
-                pred255_dn = np.clip(pred_dn * 255.0 + 0.5, 0, 255).astype(np.uint8)
-                pred255_exp = np.clip(pred_exp * 255.0 + 0.5, 0, 255).astype(np.uint8)
-                pred255_mid = np.clip(pred_mid * 255.0 + 0.5, 0, 255).astype(np.uint8)
+                # Convert to uint8 for display (PNG format for wandb)
+                pred255_dn = np.clip(pred_dn * 255.0, 0, 255).astype(np.uint8)
+                pred255_exp = np.clip(pred_exp * 255.0, 0, 255).astype(np.uint8)
+                pred255_mid = np.clip(pred_mid * 255.0, 0, 255).astype(np.uint8)
 
                 # Calculate metrics
                 psnr_dn = utils.calculate_psnr(origin255.astype(np.float32), pred255_dn.astype(np.float32))
@@ -324,26 +390,59 @@ def validate_model(network, valid_dict, masker, args, epoch, systime, logger):
                 # Save images
                 if i == 0:
                     if epoch == args.n_snapshot:
-                        Image.fromarray(origin255).convert("RGB").save(
-                            os.path.join(
-                                save_dir, "{}_{:03d}-{:03d}_clean.png".format(valid_name, idx, epoch)
+                        # Save clean and noisy images (check if grayscale)
+                        if (
+                            len(origin255.shape) == 3
+                            and np.allclose(origin255[:, :, 0], origin255[:, :, 1])
+                            and np.allclose(origin255[:, :, 1], origin255[:, :, 2])
+                        ):
+                            Image.fromarray(origin255[:, :, 0], mode="L").save(
+                                os.path.join(
+                                    save_dir, "{}_{:03d}-{:03d}_clean.png".format(valid_name, idx, epoch)
+                                )
                             )
-                        )
-                        Image.fromarray(noisy255).convert("RGB").save(
-                            os.path.join(
-                                save_dir, "{}_{:03d}-{:03d}_noisy.png".format(valid_name, idx, epoch)
+                            Image.fromarray(noisy255[:, :, 0], mode="L").save(
+                                os.path.join(
+                                    save_dir, "{}_{:03d}-{:03d}_noisy.png".format(valid_name, idx, epoch)
+                                )
                             )
-                        )
+                        else:
+                            Image.fromarray(origin255).save(
+                                os.path.join(
+                                    save_dir, "{}_{:03d}-{:03d}_clean.png".format(valid_name, idx, epoch)
+                                )
+                            )
+                            Image.fromarray(noisy255).save(
+                                os.path.join(
+                                    save_dir, "{}_{:03d}-{:03d}_noisy.png".format(valid_name, idx, epoch)
+                                )
+                            )
 
-                    Image.fromarray(pred255_dn).convert("RGB").save(
-                        os.path.join(save_dir, "{}_{:03d}-{:03d}_dn.png".format(valid_name, idx, epoch))
-                    )
-                    Image.fromarray(pred255_exp).convert("RGB").save(
-                        os.path.join(save_dir, "{}_{:03d}-{:03d}_exp.png".format(valid_name, idx, epoch))
-                    )
-                    Image.fromarray(pred255_mid).convert("RGB").save(
-                        os.path.join(save_dir, "{}_{:03d}-{:03d}_mid.png".format(valid_name, idx, epoch))
-                    )
+                    # Save as grayscale PNG if all channels are the same, otherwise RGB
+                    if (
+                        len(pred255_dn.shape) == 3
+                        and np.allclose(pred255_dn[:, :, 0], pred255_dn[:, :, 1])
+                        and np.allclose(pred255_dn[:, :, 1], pred255_dn[:, :, 2])
+                    ):
+                        Image.fromarray(pred255_dn[:, :, 0], mode="L").save(
+                            os.path.join(save_dir, "{}_{:03d}-{:03d}_dn.png".format(valid_name, idx, epoch))
+                        )
+                        Image.fromarray(pred255_exp[:, :, 0], mode="L").save(
+                            os.path.join(save_dir, "{}_{:03d}-{:03d}_exp.png".format(valid_name, idx, epoch))
+                        )
+                        Image.fromarray(pred255_mid[:, :, 0], mode="L").save(
+                            os.path.join(save_dir, "{}_{:03d}-{:03d}_mid.png".format(valid_name, idx, epoch))
+                        )
+                    else:
+                        Image.fromarray(pred255_dn).save(
+                            os.path.join(save_dir, "{}_{:03d}-{:03d}_dn.png".format(valid_name, idx, epoch))
+                        )
+                        Image.fromarray(pred255_exp).save(
+                            os.path.join(save_dir, "{}_{:03d}-{:03d}_exp.png".format(valid_name, idx, epoch))
+                        )
+                        Image.fromarray(pred255_mid).save(
+                            os.path.join(save_dir, "{}_{:03d}-{:03d}_mid.png".format(valid_name, idx, epoch))
+                        )
 
         # Calculate average metrics
         avg_psnr_dn = np.mean(avg_psnr_dn)
@@ -353,25 +452,63 @@ def validate_model(network, valid_dict, masker, args, epoch, systime, logger):
         avg_psnr_mid = np.mean(avg_psnr_mid)
         avg_ssim_mid = np.mean(avg_ssim_mid)
 
-        # Log results
-        log_path = os.path.join(validation_path, "A_log_{}.csv".format(valid_name))
-        with open(log_path, "a") as f:
-            f.write(
-                "epoch:{},dn:{:.6f}/{:.6f},exp:{:.6f}/{:.6f},mid:{:.6f}/{:.6f}\n".format(
-                    epoch, avg_psnr_dn, avg_ssim_dn, avg_psnr_exp, avg_ssim_exp, avg_psnr_mid, avg_ssim_mid
-                )
-            )
+        # Log validation results to W&B and CSV
+        wandb.log(
+            {
+                f"val_{valid_name}/psnr_dn": avg_psnr_dn,
+                f"val_{valid_name}/ssim_dn": avg_ssim_dn,
+                f"val_{valid_name}/psnr_exp": avg_psnr_exp,
+                f"val_{valid_name}/ssim_exp": avg_ssim_exp,
+                f"val_{valid_name}/psnr_mid": avg_psnr_mid,
+                f"val_{valid_name}/ssim_mid": avg_ssim_mid,
+                f"val_{valid_name}/beta": beta,
+                "epoch": epoch,
+            }
+        )
+
+        # Save sample images to W&B
+        if epoch % (args.n_snapshot * 2) == 0:  # Log images less frequently
+            sample_images = []
+            for idx in range(min(3, len(valid_images))):  # Log first 3 validation images
+                if os.path.exists(os.path.join(save_dir, f"{valid_name}_{idx:03d}-{epoch:03d}_clean.png")):
+                    sample_images.append(
+                        wandb.Image(
+                            os.path.join(save_dir, f"{valid_name}_{idx:03d}-{epoch:03d}_clean.png"),
+                            caption=f"Clean {idx}",
+                        )
+                    )
+                if os.path.exists(os.path.join(save_dir, f"{valid_name}_{idx:03d}-{epoch:03d}_dn.png")):
+                    sample_images.append(
+                        wandb.Image(
+                            os.path.join(save_dir, f"{valid_name}_{idx:03d}-{epoch:03d}_dn.png"),
+                            caption=f"Denoised {idx}",
+                        )
+                    )
+                if os.path.exists(os.path.join(save_dir, f"{valid_name}_{idx:03d}-{epoch:03d}_mid.png")):
+                    sample_images.append(
+                        wandb.Image(
+                            os.path.join(save_dir, f"{valid_name}_{idx:03d}-{epoch:03d}_mid.png"),
+                            caption=f"Mid {idx}",
+                        )
+                    )
+
+            if sample_images:
+                wandb.log({f"val_{valid_name}/sample_images": sample_images, "epoch": epoch})
+
+        print(
+            f"📊 Validation E{epoch:03d} | PSNR_dn: {avg_psnr_dn:.2f} | SSIM_dn: {avg_ssim_dn:.4f} | PSNR_mid: {avg_psnr_mid:.2f} | SSIM_mid: {avg_ssim_mid:.4f}"
+        )
 
 
 def main():
     """Main training function"""
     args = parse_args()
 
-    systime, logger = setup_training(args)
+    systime = setup_training(args)  # setup training environment with wandb
 
-    model = create_model(args)
+    model = create_model(args)  # create model
 
-    training_loader, valid_dict = create_data_loaders(args)
+    training_loader, valid_dict = create_data_loaders(args)  # create data loaders
 
     # Create optimizer and scheduler
     optimizer, scheduler = create_optimizer_scheduler(model, args)
@@ -383,43 +520,64 @@ def main():
     epoch_init = 1
     if args.resume is not None:
         epoch_init, optimizer, scheduler = utils.resume_state(args.resume, optimizer, scheduler)
+        print(f"🔄 Resumed training from epoch {epoch_init}")
+        wandb.config.update({"resumed_from": args.resume, "resume_epoch": epoch_init})
 
     # Load pretrained model if specified
     if args.checkpoint is not None:
-        model = utils.load_network(args.checkpoint, model, strict=True, logger=logger)
+        model = utils.load_network(args.checkpoint, model, strict=True)
+        print(f"📦 Loaded pretrained model from {args.checkpoint}")
+        wandb.config.update({"pretrained_model": args.checkpoint})
 
         # Reset epoch for fine-tuning
         epoch_init = 1
-        for i in range(1, epoch_init):
+        for _ in range(1, epoch_init):
             scheduler.step()
             new_lr = scheduler.get_lr()[0]
-            logger.info("----------------------------------------------------")
-            logger.info("==> Resuming Training with learning rate:{}".format(new_lr))
-            logger.info("----------------------------------------------------")
+            print(f"==> Resuming Training with learning rate: {new_lr}")
 
-    logger.info("Training initialized successfully")
+    print("✅ Training initialized successfully")
     print("Batchsize={}, number of epoch={}".format(2, args.n_epoch))
 
     # Clear GPU cache before training
     torch.cuda.empty_cache()
-    
+
     # Training loop
     for epoch in range(epoch_init, args.n_epoch + 1):
         # Train one epoch
-        train_epoch(model, training_loader, optimizer, masker, args, epoch, logger)
+        epoch_losses = train_epoch(model, training_loader, optimizer, masker, args, epoch)
+
+        wandb.log(
+            {
+                "epoch_summary/avg_loss_total": epoch_losses["total"],
+                "epoch_summary/avg_loss_reg": epoch_losses["reg"],
+                "epoch_summary/avg_loss_rev": epoch_losses["rev"],
+                "epoch": epoch,
+            }
+        )
 
         # Update learning rate
         scheduler.step()
 
+        # Log learning rate
+        current_lr = scheduler.get_lr()[0]
+        wandb.log({"train/learning_rate_epoch": current_lr, "epoch": epoch})
+
         # Validation and checkpoint saving
         if epoch % args.n_snapshot == 0 or epoch == args.n_epoch:
             # Save model
-            utils.save_network(model, args.save_path, epoch, "model", logger)
+            model_path = utils.save_network(model, args.save_path, epoch, "model")
+
+            # Log model artifact to W&B
+            model_artifact = wandb.Artifact(f"model-epoch-{epoch}", type="model")
+            model_artifact.add_file(model_path)
+            wandb.log_artifact(model_artifact)
 
             # Validate model
-            validate_model(model, valid_dict, masker, args, epoch, systime, logger)
+            validate_model(model, valid_dict, masker, args, epoch, systime)
 
-    logger.info("Training completed successfully")
+    print("🎉 Training completed successfully!")
+    wandb.finish()
 
 
 if __name__ == "__main__":
