@@ -179,7 +179,6 @@ def process_tif_images(
 
     print(f"Found {len(tif_files)} .tif files to process")
 
-    # Initialize model for single channel (grayscale) images
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # Use new parameter names but map from old checkpoint
     model = UNet(in_channels=1, out_channels=1, depth=5, base_filters=48).to(device)

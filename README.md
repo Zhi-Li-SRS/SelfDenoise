@@ -23,7 +23,21 @@ pip install -e .
 
 Note: Installing PyTorch may require selecting the right extra index for your CUDA version. See https://pytorch.org/get-started/locally/ if the default wheel does not match your environment.
 
-## CLI Usage
+## Quick Start
+
+### Simple Python Commands
+
+For quick usage, you can directly run:
+
+```bash
+# Training
+python train.py --data_dir ./data/train --val_dirs ./data/validation --n_epoch 200
+
+# Inference
+python infer.py --test_dir ./data/test --checkpoint ./ckpt/srs_epoch_200.pth --output_dir ./predict
+```
+
+### CLI Usage
 
 After installation, the following commands are available:
 
